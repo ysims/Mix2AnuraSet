@@ -14,12 +14,9 @@ from torchmetrics.classification import (
     # https://torchmetrics.readthedocs.io/en/stable/classification/precision_recall_curve.html#multilabelprecisionrecallcurve
 )
 
-def validate(encoder, projector, data_loader, transform, metric_fn, device, remove_non_overlapping_classes):
+def validate(encoder, projector, data_loader, transform, metric_fn, device):
 
-    if remove_non_overlapping_classes:
-        NUM_CLASSES = 36
-    else:
-        NUM_CLASSES = 42 #36 if non-overlapping classes are removed
+    NUM_CLASSES = 42 #36 if non-overlapping classes are removed
     
     encoder.eval()
     projector.eval()
@@ -31,9 +28,6 @@ def validate(encoder, projector, data_loader, transform, metric_fn, device, remo
     freq_species = ['SPHSUR', 'BOABIS', 'BOAFAB', 'LEPPOD']
     common_species = ['PITAZU', 'DENMIN', 'PHYCUV', 'LEPLAT', 'PHYALB', 'SCIPER', 'DENNAN', 'BOAALB']
     rare_species = ['DENNAH', 'RHIICT', 'BOALEP', 'ELABIC', 'BOAPRA', 'DENCRU', 'BOALUN', 'PHYMAR', 'PHYSAU', 'LEPFUS', 'LEPLAB', 'BOARAN', 'SCIFUV', 'AMEPIC', 'ADEDIP', 'ELAMAT', 'PHYNAT', 'LEPNOT', 'ADEMAR', 'BOAALM', 'PHYDIS', 'RHIORN', 'DENELE', 'SCIALT', 'SCINAS', 'SCIRIZ', 'LEPELE', 'RHISCI', 'LEPFLA', 'SCIFUS']
-
-    if remove_non_overlapping_classes:
-        rare_species = [ele for ele in rare_species if ele not in['LEPELE', 'RHISCI', 'SCINAS', 'LEPFLA', 'SCIRIZ', 'SCIFUS']]
 
     metric_collection = MetricCollection([
             MultilabelF1Score(num_labels=NUM_CLASSES, average=None, threshold=0.5).to(args.device),
@@ -62,27 +56,14 @@ def validate(encoder, projector, data_loader, transform, metric_fn, device, remo
     result_ev = calculate_metrics(predictions, targets, metric_collection)
     multif1 = result_ev['MultilabelF1Score']
 
-    if not remove_non_overlapping_classes:
-
-        class_mapping = [
-            'SPHSUR', 'BOABIS', 'SCIPER', 'DENNAH', 'LEPLAT', 'RHIICT', 'BOALEP',
-            'BOAFAB', 'PHYCUV', 'DENMIN', 'ELABIC', 'BOAPRA', 'DENCRU', 'BOALUN',
-            'BOAALB', 'PHYMAR', 'PITAZU', 'PHYSAU', 'LEPFUS', 'DENNAN', 'PHYALB',
-            'LEPLAB', 'SCIFUS', 'BOARAN', 'SCIFUV', 'AMEPIC', 'LEPPOD', 'ADEDIP',
-            'ELAMAT', 'PHYNAT', 'LEPELE', 'RHISCI', 'SCINAS', 'LEPNOT', 'ADEMAR',
-            'BOAALM', 'PHYDIS', 'RHIORN', 'LEPFLA', 'SCIRIZ', 'DENELE', 'SCIALT'
-        ]
-
-    else:
-
-        class_mapping = [
-            'SPHSUR', 'BOABIS', 'SCIPER', 'DENNAH', 'LEPLAT', 'RHIICT', 'BOALEP',
-            'BOAFAB', 'PHYCUV', 'DENMIN', 'ELABIC', 'BOAPRA', 'DENCRU', 'BOALUN',
-            'BOAALB', 'PHYMAR', 'PITAZU', 'PHYSAU', 'LEPFUS', 'DENNAN', 'PHYALB',
-            'LEPLAB', 'BOARAN', 'SCIFUV', 'AMEPIC', 'LEPPOD', 'ADEDIP',
-            'ELAMAT', 'PHYNAT', 'LEPNOT', 'ADEMAR',
-            'BOAALM', 'PHYDIS', 'RHIORN', 'DENELE', 'SCIALT'
-        ]
+    class_mapping = [
+        'SPHSUR', 'BOABIS', 'SCIPER', 'DENNAH', 'LEPLAT', 'RHIICT', 'BOALEP',
+        'BOAFAB', 'PHYCUV', 'DENMIN', 'ELABIC', 'BOAPRA', 'DENCRU', 'BOALUN',
+        'BOAALB', 'PHYMAR', 'PITAZU', 'PHYSAU', 'LEPFUS', 'DENNAN', 'PHYALB',
+        'LEPLAB', 'SCIFUS', 'BOARAN', 'SCIFUV', 'AMEPIC', 'LEPPOD', 'ADEDIP',
+        'ELAMAT', 'PHYNAT', 'LEPELE', 'RHISCI', 'SCINAS', 'LEPNOT', 'ADEMAR',
+        'BOAALM', 'PHYDIS', 'RHIORN', 'LEPFLA', 'SCIRIZ', 'DENELE', 'SCIALT'
+    ]
 
     multif1_freq = []
     multif1_common = []

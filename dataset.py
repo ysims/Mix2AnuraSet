@@ -5,13 +5,7 @@ import torch
 import os
 
 class AnuraSet(Dataset):
-    def __init__(self,
-                 annotations_file, 
-                 audio_dir, 
-                 train=True,
-                 remove_non_overlapping_classes=False,
-                 remove_empty_samples=False,
-                ):
+    def __init__(self, annotations_file, audio_dir, train=True):
 
         if isinstance(annotations_file, str):
             df = pd.read_csv(annotations_file)
@@ -25,15 +19,6 @@ class AnuraSet(Dataset):
 
         self.annotations = df
         self.audio_dir = audio_dir
-
-        if remove_non_overlapping_classes:
-            #removing 6 non-overlapping classes (4 in train and 2 in test)
-            self.annotations = df.drop(columns=['SCIFUS', 'LEPELE', 'RHISCI', 'SCINAS', 'LEPFLA', 'SCIRIZ'])
-
-        if remove_empty_samples:
-            #removing example with no class activated
-            cls_names = [cls for cls in self.annotations.columns if cls.isupper()]
-            self.annotations = self.annotations.loc[~(self.annotations[cls_names] == 0).all(axis=1)]
 
     def __len__(self):
         return len(self.annotations)

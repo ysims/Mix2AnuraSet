@@ -22,14 +22,7 @@ from args import args
 import warnings
 warnings.filterwarnings("ignore")
 
-if args.dataset == 'anuraset':
-    NUM_CLASSES = 42
-elif args.dataset in ['anuraset36n', 'anuraset36']:
-    NUM_CLASSES = 36
-else:
-    raise ValueError("Invalid dataset, choose on of the following : ['anuraset', 'anuraset36n', 'anuraset36'] for the original dataset, without non-overlapping training and testing classes, and without silences, respectively.")
-
-REMOVE_NON_OVERLAPPING_CLASSES = args.dataset in ['anuraset36n', 'anuraset36']
+NUM_CLASSES = 42
 
 root_dir = args.rootdir
 
@@ -69,18 +62,14 @@ AUDIO_DIR = os.path.join(root_dir, 'audio')
 training_data = AnuraSet(
     annotations_file=ANNOTATIONS_FILE, 
     audio_dir=AUDIO_DIR, 
-    train=True,
-    remove_non_overlapping_classes=args.dataset in ['anuraset36', 'anuraset36n'],
-    remove_empty_samples=args.dataset=='anuraset36',
+    train=True
 )
 print(f"There are {len(training_data)} samples in the training set.")
 
 val_data = AnuraSet(
     annotations_file=ANNOTATIONS_FILE, 
     audio_dir=AUDIO_DIR, 
-    train=False,
-    remove_non_overlapping_classes=args.dataset in ['anuraset36', 'anuraset36n'],
-    remove_empty_samples=args.dataset=='anuraset36',
+    train=False
 )
 print(f"There are {len(val_data)} samples in the test set.")
 
@@ -127,7 +116,7 @@ for epoch in range(args.epochs):
     adjust_learning_rate(optimiser, epoch, args)
 
     loss_train = train(encoder, projector, train_dataloader, train_transform, loss_fn, optimiser, scaler, args)
-    metric_val, f1_freq, f1_common, f1_rare = validate(encoder, projector, val_dataloader, val_transform, metric_fn, args.device, REMOVE_NON_OVERLAPPING_CLASSES)
+    metric_val, f1_freq, f1_common, f1_rare = validate(encoder, projector, val_dataloader, val_transform, metric_fn, args.device)
 
     if best_score is None:
         best_score = metric_val

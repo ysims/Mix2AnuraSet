@@ -9,7 +9,6 @@ import warnings
 import collections
 from itertools import repeat
 from enum import Enum
-from torchinfo import summary
 try:
     from torch.hub import load_state_dict_from_url  # noqa: 401
 except ImportError:
