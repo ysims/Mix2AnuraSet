@@ -3,6 +3,9 @@ import numpy as np
 import torch
 import math
 
+from train_diffusion import train_diffusion, generate_prototypes
+from DiffusionDataset import DiffusionDataset
+
 def adjust_learning_rate(optimizer, epoch, args):
     """Decay the learning rate based on schedule"""
     lr = args.lr
@@ -20,7 +23,7 @@ def train(encoder, projector, data_loader, transform, loss_fn, optimiser, scaler
 
     loss_total = 0.0
 
-    for batch_idx, (input, target, index) in enumerate(tqdm(data_loader)):
+    for _, (input, target, _) in enumerate(tqdm(data_loader)):
         input, target = input.to(args.device), target.to(args.device)
         if args.mix == 'mixup':   
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
@@ -73,6 +76,26 @@ def train(encoder, projector, data_loader, transform, loss_fn, optimiser, scaler
         scaler.update()
 
         loss_total += loss.item()  
+
+    # Use the encoder to train a diffusion model to generate embeddings
+    diffusion_model = train_diffusion(encoder, data_loader, args, transform)
+    prototypes = generate_prototypes(encoder, data_loader, 42, transform)
+    diffusion_dataset = DiffusionDataset(diffusion_model, data_loader, prototypes, args.rootdir, args.threshold)
+
+    # Train with the diffusion dataset
+    diffusion_loader = torch.utils.data.DataLoader(diffusion_dataset, batch_size=args.bs, shuffle=True, num_workers=args.workers, pin_memory=True)
+    for _, (input, target) in enumerate(tqdm(diffusion_loader)):
+        input, target = input.to(args.device), target.to(args.device)
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            prediction = projector(encoder(transform(input)))
+            loss = loss_fn(prediction, target)
+
+        optimiser.zero_grad()
+        scaler.scale(loss).backward()
+        scaler.step(optimiser)
+        scaler.update()
+
+        loss_total += loss.item()
 
     loss_total /= num_batches   
 

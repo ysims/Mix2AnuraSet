@@ -31,4 +31,10 @@ parser.add_argument("--tmask", type=int, default=30) #tmax
 parser.add_argument("--fstripe", type=int, default=3) #fstripe
 parser.add_argument("--tstripe", type=int, default=6) #tstripe
 
+# Diffusion parameters
+parser.add_argument("--diff_epochs", type=int, default=50) #number of epochs for diffusion training
+parser.add_argument("--diff_lr", type=float, default=1e-3) #learning rate for diffusion model
+parser.add_argument("--diff_weight_decay", type=float, default=1e-6) #weight decay for diffusion model
+parser.add_argument("--threshold", type=int, default=2000) #threshold for underrepresented classes
+
 args = parser.parse_args()
