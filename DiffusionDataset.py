@@ -40,9 +40,18 @@ class DiffusionDataset(Dataset):
         diffusion_model.eval()
         encoder.eval()
         
+        # Add device safety check
+        device = next(diffusion_model.parameters()).device
+        prototypes = prototypes.to(device)
+        
+        # Add safety limits to prevent infinite loops
+        max_iterations = len(dataloader) * 10  # Maximum iterations to prevent infinite loops
+        iteration_count = 0
+        
         # Continue until all classes have at least `threshold` samples
-        while (class_counts < threshold).any():
+        while (class_counts < threshold).any() and iteration_count < max_iterations:
             for input_audio, labels, _ in dataloader:
+                iteration_count += 1
                 # Process each sample in the batch
                 for i in range(input_audio.size(0)):
                     sample_audio = input_audio[i:i+1]  # Keep batch dimension
@@ -55,41 +64,56 @@ class DiffusionDataset(Dataset):
                     
                     # Only generate if any class in this label is underrepresented
                     if any(class_counts[c] < threshold for c in classes_in_label):
-                        with torch.no_grad():
-                            # Move input to device and apply transform
-                            sample_audio = sample_audio.to("cuda")
-                            if transform is not None:
-                                sample_audio = transform(sample_audio)
-                            
-                            # Extract features using the encoder
-                            features = encoder(sample_audio)
-                            
-                            # Generate synthetic features using diffusion
-                            noisy_sample = diffusion_model.distort(features, 0.1)
-                            # Get a random prototype from positive classes
-                            prototype = random.choice(
-                                [prototypes[c] for c in classes_in_label if class_counts[c] < threshold]
-                            ).unsqueeze(0).to("cuda")
-                            sample = diffusion_model(noisy_sample, prototype)
-                        self.data.append(sample.squeeze().cpu())
-                        self.labels.append(sample_label.detach().clone().cpu())
-                        for c in classes_in_label:
-                            class_counts[c] += 1
+                        try:
+                            with torch.no_grad():
+                                # Move input to device and apply transform
+                                sample_audio = sample_audio.to(device)
+                                if transform is not None:
+                                    sample_audio = transform(sample_audio)
+                                
+                                # Extract features using the encoder
+                                features = encoder(sample_audio)
+                                
+                                # Generate synthetic features using diffusion
+                                noisy_sample = diffusion_model.distort(features, 0.1)
+                                # Get a random prototype from positive classes
+                                underrep_classes = [c for c in classes_in_label if class_counts[c] < threshold]
+                                if len(underrep_classes) == 0:
+                                    continue
+                                prototype = random.choice([prototypes[c] for c in underrep_classes])
+                                prototype = prototype.unsqueeze(0).to(device)
+                                sample = diffusion_model(noisy_sample, prototype)
+                            self.data.append(sample.squeeze().cpu())
+                            self.labels.append(sample_label.detach().clone().cpu())
+                            for c in classes_in_label:
+                                class_counts[c] += 1
+                        except RuntimeError as e:
+                            print(f"Error generating synthetic sample: {e}")
+                            # Skip this sample and continue
+                            continue
                     
                     # Stop early if all classes are filled
                     if not (class_counts < threshold).any():
                         break
                 
-                # Stop early if all classes are filled
-                if not (class_counts < threshold).any():
+                # Stop early if all classes are filled or max iterations reached
+                if not (class_counts < threshold).any() or iteration_count >= max_iterations:
                     break
 
         # Convert to tensor
-        self.data = torch.stack(self.data)
-        self.labels = torch.stack(self.labels)
+        if len(self.data) > 0:
+            self.data = torch.stack(self.data)
+            self.labels = torch.stack(self.labels)
+        else:
+            # Create empty tensors if no data was generated
+            print("Warning: No synthetic data was generated. Creating empty dataset.")
+            self.data = torch.empty(0, prototypes.shape[1])  # Empty tensor with correct feature dimension
+            self.labels = torch.empty(0, len(classes))  # Empty tensor with correct label dimension
 
-        print(class_counts)
-        print(len(self.data))
+        print(f"Final class counts: {class_counts}")
+        print(f"Generated {len(self.data)} synthetic samples")
+        if iteration_count >= max_iterations:
+            print("Warning: Reached maximum iteration limit for synthetic data generation")
 
     def __len__(self):
         return len(self.data)

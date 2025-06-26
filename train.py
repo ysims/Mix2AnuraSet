@@ -84,10 +84,11 @@ def train(encoder, projector, data_loader, transform, loss_fn, optimiser, scaler
 
     # Train with the diffusion dataset
     diffusion_loader = torch.utils.data.DataLoader(diffusion_dataset, batch_size=args.bs, shuffle=True, num_workers=args.workers, pin_memory=True)
-    for _, (input, target) in enumerate(tqdm(diffusion_loader)):
-        input, target = input.to(args.device), target.to(args.device)
+    for _, (synthetic_features, target) in enumerate(tqdm(diffusion_loader)):
+        synthetic_features, target = synthetic_features.to(args.device), target.to(args.device)
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            prediction = projector(encoder(transform(input)))
+            # Use synthetic features directly with projector (they're already encoded)
+            prediction = projector(synthetic_features)
             loss = loss_fn(prediction, target)
 
         optimiser.zero_grad()
