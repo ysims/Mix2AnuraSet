@@ -6,13 +6,16 @@ import random
 import numpy as np
 
 class DiffusionDataset(Dataset):
-    def __init__(self, diffusion_model, dataloader, prototypes, data_path, threshold=300):
+    def __init__(self, diffusion_model, dataloader, prototypes, data_path, encoder, transform=None, threshold=300):
         """
         Args:
             diffusion_model: The diffusion model to generate samples.
-            feature_size: The size of the feature vector.
-            threshold: Classes with fewer samples than the threshold will be used to generate data.
+            dataloader: The original dataloader
+            prototypes: The class prototypes
             data_path: Path to the dataset to find underrepresented classes.
+            encoder: The encoder model to extract features
+            transform: Transform to apply to raw audio before encoding
+            threshold: Classes with fewer samples than the threshold will be used to generate data.
         """
 
         # Get the classes from the metadata
@@ -35,27 +38,48 @@ class DiffusionDataset(Dataset):
         self.data = []
 
         diffusion_model.eval()
+        encoder.eval()
+        
         # Continue until all classes have at least `threshold` samples
         while (class_counts < threshold).any():
-            for feature, label in dataloader.dataset:
-                # Ignore samples with no classes
-                if label.sum() == 0:
-                    continue
-                classes_in_label = label.nonzero(as_tuple=True)[0]
-                # Only generate if any class in this label is underrepresented
-                if any(class_counts[c] < threshold for c in classes_in_label):
-                    with torch.no_grad():
-                        feature = feature.unsqueeze(0)
-                        noisy_sample = diffusion_model.distort(feature.to("cuda"), 0.1)
-                        # Get a random prototype from positive classes
-                        prototype = random.choice(
-                            [prototypes[c] for c in classes_in_label if class_counts[c] < threshold]
-                        ).unsqueeze(0).to("cuda")
-                        sample = diffusion_model(noisy_sample, prototype)
-                    self.data.append(sample.squeeze().cpu())
-                    self.labels.append(label.detach().clone().cpu())
-                    for c in classes_in_label:
-                        class_counts[c] += 1
+            for input_audio, labels, _ in dataloader:
+                # Process each sample in the batch
+                for i in range(input_audio.size(0)):
+                    sample_audio = input_audio[i:i+1]  # Keep batch dimension
+                    sample_label = labels[i]
+                    
+                    # Ignore samples with no classes
+                    if sample_label.sum() == 0:
+                        continue
+                    classes_in_label = sample_label.nonzero(as_tuple=True)[0]
+                    
+                    # Only generate if any class in this label is underrepresented
+                    if any(class_counts[c] < threshold for c in classes_in_label):
+                        with torch.no_grad():
+                            # Move input to device and apply transform
+                            sample_audio = sample_audio.to("cuda")
+                            if transform is not None:
+                                sample_audio = transform(sample_audio)
+                            
+                            # Extract features using the encoder
+                            features = encoder(sample_audio)
+                            
+                            # Generate synthetic features using diffusion
+                            noisy_sample = diffusion_model.distort(features, 0.1)
+                            # Get a random prototype from positive classes
+                            prototype = random.choice(
+                                [prototypes[c] for c in classes_in_label if class_counts[c] < threshold]
+                            ).unsqueeze(0).to("cuda")
+                            sample = diffusion_model(noisy_sample, prototype)
+                        self.data.append(sample.squeeze().cpu())
+                        self.labels.append(sample_label.detach().clone().cpu())
+                        for c in classes_in_label:
+                            class_counts[c] += 1
+                    
+                    # Stop early if all classes are filled
+                    if not (class_counts < threshold).any():
+                        break
+                
                 # Stop early if all classes are filled
                 if not (class_counts < threshold).any():
                     break

@@ -80,7 +80,7 @@ def train(encoder, projector, data_loader, transform, loss_fn, optimiser, scaler
     # Use the encoder to train a diffusion model to generate embeddings
     diffusion_model = train_diffusion(encoder, data_loader, args, transform)
     prototypes = generate_prototypes(encoder, data_loader, 42, transform)
-    diffusion_dataset = DiffusionDataset(diffusion_model, data_loader, prototypes, args.rootdir, args.threshold)
+    diffusion_dataset = DiffusionDataset(diffusion_model, data_loader, prototypes, args.rootdir, encoder, transform, args.threshold)
 
     # Train with the diffusion dataset
     diffusion_loader = torch.utils.data.DataLoader(diffusion_dataset, batch_size=args.bs, shuffle=True, num_workers=args.workers, pin_memory=True)
