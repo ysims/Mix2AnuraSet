@@ -107,7 +107,7 @@ class CachedDiffusionComponents:
             return None, None, None
 
 def setup_diffusion_components(encoder, train_dataloader, train_transform, args, use_cache=True):
-    """Setup diffusion components with optional caching"""
+    """Setup diffusion components with optional caching - should only be called after encoder warmup"""
     cache_manager = CachedDiffusionComponents() if use_cache else None
     
     # Try to load from cache first
@@ -117,7 +117,8 @@ def setup_diffusion_components(encoder, train_dataloader, train_transform, args,
             return diffusion_model, prototypes, diffusion_dataset
     
     # If cache miss or no caching, compute from scratch
-    print('Training diffusion model...')
+    # NOTE: This should only be called after encoder has learned meaningful features!
+    print('Training diffusion model on meaningful encoder features...')
     diffusion_model = train_diffusion(encoder, train_dataloader, args, train_transform)
     
     print('Generating prototypes...')
@@ -132,6 +133,67 @@ def setup_diffusion_components(encoder, train_dataloader, train_transform, args,
         cache_manager.save_components(diffusion_model, prototypes, diffusion_dataset, args)
     
     return diffusion_model, prototypes, diffusion_dataset
+
+def train_with_warmup(encoder, projector, data_loader, val_dataloader, transform, val_transform, 
+                     loss_fn, optimiser, scaler, metric_fn, args):
+    """Complete training loop with proper diffusion warmup timing"""
+    
+    # Initialize diffusion components
+    diffusion_model = None
+    prototypes = None
+    diffusion_dataset = None
+    diffusion_trained = False
+    
+    best_score = None
+    best_freq = None
+    best_common = None
+    best_rare = None
+    
+    for epoch in range(args.epochs):
+        print(f"Epoch {epoch+1}")
+        
+        adjust_learning_rate(optimiser, epoch, args)
+        
+        # Train diffusion model after encoder has learned meaningful features
+        if (not diffusion_trained and epoch >= args.warmup_epochs and 
+            args.mix in ['mix2', 'multimix', 'manmixup']):
+            print(f'Encoder has warmed up after {args.warmup_epochs} epochs. Setting up diffusion components...')
+            diffusion_model, prototypes, diffusion_dataset = setup_diffusion_components(
+                encoder, data_loader, transform, args, use_cache=args.use_cache)
+            diffusion_trained = True
+            print('Diffusion training complete. Continuing with augmented training...')
+        
+        # Regular training with or without synthetic data
+        use_synthetic = diffusion_trained and (epoch % args.synthetic_freq == 0)
+        loss_train = train_optimized(encoder, projector, data_loader, transform, loss_fn, 
+                                   optimiser, scaler, args, diffusion_dataset, use_synthetic)
+        
+        # Validation
+        from val import validate
+        metric_val, f1_freq, f1_common, f1_rare = validate(encoder, projector, val_dataloader, 
+                                                          val_transform, metric_fn, args.device)
+        
+        # Save best model
+        if best_score is None or metric_val > best_score:
+            best_score = metric_val
+            best_freq = f1_freq
+            best_common = f1_common  
+            best_rare = f1_rare
+            
+            if args.save:
+                import os
+                save_path = os.path.join(args.rootdir, 'ckpt')
+                os.makedirs(save_path, exist_ok=True)
+                pt_filepath = os.path.join(save_path, 'model.pt')
+                torch.save(torch.nn.Sequential(encoder, projector), pt_filepath)
+        
+        print(f"Loss train: {loss_train:.4f}\tMacro F1-score: {metric_val:.4f}\t"
+              f"Freq: {f1_freq:.4f}\tCommon: {f1_common:.4f}\tRare: {f1_rare:.4f}")
+    
+    print(f"Best scores:\nMacro F1-score: {best_score:.4f}\tFreq: {best_freq:.4f}\t"
+          f"Common: {best_common:.4f}\tRare: {best_rare:.4f}")
+    
+    return best_score, best_freq, best_common, best_rare
 
 def train_optimized(encoder, projector, data_loader, transform, loss_fn, optimiser, scaler, args, 
                    diffusion_dataset=None, use_synthetic=True):

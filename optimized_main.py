@@ -107,12 +107,11 @@ pt_filepath = os.path.join(save_path, 'model.pt')
 
 best_score = None
 
-# Setup diffusion components once at the beginning (with caching)
+# Setup diffusion components (will be initialized after warmup)
+diffusion_model = None
+prototypes = None
 diffusion_dataset = None
-if args.mix in ['mix2', 'multimix', 'manmixup']:  # Only if using augmentation methods
-    diffusion_model, prototypes, diffusion_dataset = setup_diffusion_components(
-        encoder, train_dataloader, train_transform, args, use_cache=True
-    )
+diffusion_trained = False
 
 # Compile models for better performance (PyTorch 2.0+)
 try:
@@ -122,18 +121,29 @@ try:
 except:
     print("Model compilation not available, continuing without compilation")
 
-print('Starting optimized training')
+print('Starting optimized training with proper warmup')
 for epoch in range(args.epochs):
     print(f"Epoch {epoch+1}")
 
     adjust_learning_rate(optimiser, epoch, args)
 
+    # Train diffusion model after encoder has learned meaningful features
+    if (not diffusion_trained and epoch >= args.warmup_epochs and 
+        args.mix in ['mix2', 'multimix', 'manmixup']):
+        print(f'Encoder has warmed up after {args.warmup_epochs} epochs. Setting up diffusion components...')
+        diffusion_model, prototypes, diffusion_dataset = setup_diffusion_components(
+            encoder, train_dataloader, train_transform, args, use_cache=args.use_cache
+        )
+        diffusion_trained = True
+        print('Diffusion training complete. Continuing with augmented training...')
+
     # Use optimized training function
+    use_synthetic = diffusion_trained and (epoch % args.synthetic_freq == 0)
     loss_train = train_optimized(
         encoder, projector, train_dataloader, train_transform, 
         loss_fn, optimiser, scaler, args, 
         diffusion_dataset=diffusion_dataset,
-        use_synthetic=(epoch % 5 == 0)  # Use synthetic data every 5 epochs to reduce overhead
+        use_synthetic=use_synthetic
     )
     
     metric_val, f1_freq, f1_common, f1_rare = validate(
