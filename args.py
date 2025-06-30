@@ -35,6 +35,12 @@ parser.add_argument("--tstripe", type=int, default=6) #tstripe
 parser.add_argument("--diff_epochs", type=int, default=50) #number of epochs for diffusion training
 parser.add_argument("--diff_lr", type=float, default=1e-3) #learning rate for diffusion model
 parser.add_argument("--diff_weight_decay", type=float, default=1e-6) #weight decay for diffusion model
-parser.add_argument("--threshold", type=int, default=2000) #threshold for underrepresented classes
+parser.add_argument("--threshold", type=int, default=300) #threshold for underrepresented classes (reduced from 2000)
+parser.add_argument("--warmup_epochs", type=int, default=70) #epochs to train encoder before diffusion training
+
+# Optimization parameters
+parser.add_argument("--use_cache", action='store_true', default=True) #cache diffusion components
+parser.add_argument("--synthetic_freq", type=int, default=5) #use synthetic data every N epochs
+parser.add_argument("--reduce_diff_epochs", action='store_true') #reduce diffusion epochs for speed
 
 args = parser.parse_args()

@@ -11,10 +11,8 @@ from torchmetrics.classification import MultilabelF1Score
 from dataset import AnuraSet
 from models import mobilenetv3
 
-from train import train, adjust_learning_rate
+from optimized_train import train_optimized, adjust_learning_rate, setup_diffusion_components
 from val import validate
-from train_diffusion import train_diffusion, generate_prototypes
-from DiffusionDataset import DiffusionDataset
 
 from transforms import TimeShift
 from models import model_dim
@@ -28,16 +26,12 @@ NUM_CLASSES = 42
 
 root_dir = args.rootdir
 
+# Pre-compute transforms to avoid repeated creation
 resamp = Resample(orig_freq=22050, new_freq=args.sr)
-
 min_max_norm = MinMaxNorm()
-
 mel_spectrogram = MelSpectrogram(n_fft=512, hop_length=128, n_mels=128)
-
 time_mask = TimeMasking(time_mask_param=args.tmask)
-
 freq_mask = FrequencyMasking(freq_mask_param=args.fmask)
-
 tshift = TimeShift(Tshift=376) #376 = length of timesteps for 3s melspectrogram with the config above
 
 train_transform = nn.Sequential(
@@ -58,7 +52,6 @@ val_transform = nn.Sequential(
 ).to(args.device)
 
 ANNOTATIONS_FILE = os.path.join(root_dir, 'metadata.csv')
-
 AUDIO_DIR = os.path.join(root_dir, 'audio')
 
 training_data = AnuraSet(
@@ -75,12 +68,15 @@ val_data = AnuraSet(
 )
 print(f"There are {len(val_data)} samples in the test set.")
 
+# Optimize dataloader settings for better performance
 train_dataloader = DataLoader(training_data, 
     batch_size=args.bs,
     shuffle=True,
     drop_last=True,
     pin_memory=True,
     num_workers=args.workers,
+    persistent_workers=True if args.workers > 0 else False,  # Keep workers alive
+    prefetch_factor=2 if args.workers > 0 else 2,  # Prefetch more batches
 )
 
 val_dataloader = DataLoader(val_data, 
@@ -89,10 +85,10 @@ val_dataloader = DataLoader(val_data,
     drop_last=False,
     pin_memory=True,
     num_workers=args.workers,
+    persistent_workers=True if args.workers > 0 else False,
 )
 
 encoder = mobilenetv3()
-
 projector = nn.Linear(model_dim[args.model], NUM_CLASSES)
 
 encoder.to(args.device)
@@ -111,33 +107,38 @@ pt_filepath = os.path.join(save_path, 'model.pt')
 
 best_score = None
 
-# Initialize diffusion components
-diffusion_model = None
-prototypes = None
+# Setup diffusion components once at the beginning (with caching)
 diffusion_dataset = None
-diffusion_trained = False
+if args.mix in ['mix2', 'multimix', 'manmixup']:  # Only if using augmentation methods
+    diffusion_model, prototypes, diffusion_dataset = setup_diffusion_components(
+        encoder, train_dataloader, train_transform, args, use_cache=True
+    )
 
-print('Starting training')
+# Compile models for better performance (PyTorch 2.0+)
+try:
+    encoder = torch.compile(encoder)
+    projector = torch.compile(projector)
+    print("Models compiled for better performance")
+except:
+    print("Model compilation not available, continuing without compilation")
+
+print('Starting optimized training')
 for epoch in range(args.epochs):
     print(f"Epoch {epoch+1}")
 
     adjust_learning_rate(optimiser, epoch, args)
 
-    # Train diffusion model after encoder has learned some meaningful features
-    # Only do this once, after a few epochs of initial training
-    if (not diffusion_trained and epoch >= args.warmup_epochs and 
-        args.mix in ['mix2', 'multimix', 'manmixup']):
-        print('Encoder has warmed up. Training diffusion model on meaningful features...')
-        diffusion_model = train_diffusion(encoder, train_dataloader, args, train_transform)
-        print('Generating prototypes...')
-        prototypes = generate_prototypes(encoder, train_dataloader, 42, train_transform)
-        print('Creating diffusion dataset...')
-        diffusion_dataset = DiffusionDataset(diffusion_model, train_dataloader, prototypes, args.rootdir, encoder, train_transform, args.threshold)
-        diffusion_trained = True
-        print('Diffusion training complete. Continuing with augmented training...')
-
-    loss_train = train(encoder, projector, train_dataloader, train_transform, loss_fn, optimiser, scaler, args, diffusion_model, prototypes, diffusion_dataset)
-    metric_val, f1_freq, f1_common, f1_rare = validate(encoder, projector, val_dataloader, val_transform, metric_fn, args.device)
+    # Use optimized training function
+    loss_train = train_optimized(
+        encoder, projector, train_dataloader, train_transform, 
+        loss_fn, optimiser, scaler, args, 
+        diffusion_dataset=diffusion_dataset,
+        use_synthetic=(epoch % 5 == 0)  # Use synthetic data every 5 epochs to reduce overhead
+    )
+    
+    metric_val, f1_freq, f1_common, f1_rare = validate(
+        encoder, projector, val_dataloader, val_transform, metric_fn, args.device
+    )
 
     if best_score is None:
         best_score = metric_val
@@ -157,7 +158,7 @@ for epoch in range(args.epochs):
         if args.save:
             torch.save(nn.Sequential(encoder, projector), pt_filepath)
 
-    print(f"Loss train: {loss_train}\tMacro F1-score: {metric_val}\tFreq: {f1_freq}\tCommon: {f1_common}\tRare: {f1_rare}")
+    print(f"Loss train: {loss_train:.4f}\tMacro F1-score: {metric_val:.4f}\tFreq: {f1_freq:.4f}\tCommon: {f1_common:.4f}\tRare: {f1_rare:.4f}")
 
-print(f"Best scores:\nMacro F1-score: {best_score}\tFreq: {best_freq}\tCommon: {best_common}\tRare: {best_rare}")    
+print(f"Best scores:\nMacro F1-score: {best_score:.4f}\tFreq: {best_freq:.4f}\tCommon: {best_common:.4f}\tRare: {best_rare:.4f}")    
 print("Finished training")

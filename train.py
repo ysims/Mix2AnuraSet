@@ -15,7 +15,7 @@ def adjust_learning_rate(optimizer, epoch, args):
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-def train(encoder, projector, data_loader, transform, loss_fn, optimiser, scaler, args):
+def train(encoder, projector, data_loader, transform, loss_fn, optimiser, scaler, args, diffusion_model=None, prototypes=None, diffusion_dataset=None):
     
     num_batches = len(data_loader)
     encoder.train()
@@ -77,26 +77,23 @@ def train(encoder, projector, data_loader, transform, loss_fn, optimiser, scaler
 
         loss_total += loss.item()  
 
-    # Use the encoder to train a diffusion model to generate embeddings
-    diffusion_model = train_diffusion(encoder, data_loader, args, transform)
-    prototypes = generate_prototypes(encoder, data_loader, 42, transform)
-    diffusion_dataset = DiffusionDataset(diffusion_model, data_loader, prototypes, args.rootdir, encoder, transform, args.threshold)
+    # Only train diffusion and generate synthetic data if provided and available
+    if diffusion_dataset is not None and len(diffusion_dataset) > 0:
+        # Train with the diffusion dataset
+        diffusion_loader = torch.utils.data.DataLoader(diffusion_dataset, batch_size=args.bs, shuffle=True, num_workers=args.workers, pin_memory=True)
+        for _, (synthetic_features, target) in enumerate(tqdm(diffusion_loader)):
+            synthetic_features, target = synthetic_features.to(args.device), target.to(args.device)
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                # Use synthetic features directly with projector (they're already encoded)
+                prediction = projector(synthetic_features)
+                loss = loss_fn(prediction, target)
 
-    # Train with the diffusion dataset
-    diffusion_loader = torch.utils.data.DataLoader(diffusion_dataset, batch_size=args.bs, shuffle=True, num_workers=args.workers, pin_memory=True)
-    for _, (synthetic_features, target) in enumerate(tqdm(diffusion_loader)):
-        synthetic_features, target = synthetic_features.to(args.device), target.to(args.device)
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            # Use synthetic features directly with projector (they're already encoded)
-            prediction = projector(synthetic_features)
-            loss = loss_fn(prediction, target)
+            optimiser.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optimiser)
+            scaler.update()
 
-        optimiser.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimiser)
-        scaler.update()
-
-        loss_total += loss.item()
+            loss_total += loss.item()
 
     loss_total /= num_batches   
 
