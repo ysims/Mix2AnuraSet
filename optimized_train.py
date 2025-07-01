@@ -181,7 +181,6 @@ def train_with_warmup(encoder, projector, data_loader, val_dataloader, transform
             best_rare = f1_rare
             
             if args.save:
-                import os
                 save_path = os.path.join(args.rootdir, 'ckpt')
                 os.makedirs(save_path, exist_ok=True)
                 pt_filepath = os.path.join(save_path, 'model.pt')
@@ -199,11 +198,11 @@ def train_optimized(encoder, projector, data_loader, transform, loss_fn, optimis
                    diffusion_dataset=None, use_synthetic=True):
     """Optimized training function with reduced overhead"""
     
-    num_batches = len(data_loader)
     encoder.train()
     projector.train()
 
     loss_total = 0.0
+    num_total_batches = 0
     
     # Main training loop
     for _, (input, target, _) in enumerate(tqdm(data_loader, desc="Training")):
@@ -214,13 +213,13 @@ def train_optimized(encoder, projector, data_loader, transform, loss_fn, optimis
             x = transform(input)
             
             if args.mix == 'mixup':   
-                mixed_x, y_a, y_b, lam = mixup_data(x, target)
+                mixed_x, y_a, y_b, lam = mixup_data(x, target, args.alpha)
                 prediction = projector(encoder(mixed_x))
                 loss = mixup_criterion(loss_fn, prediction, y_a, y_b, lam)
                 
             elif args.mix == 'manmixup':   
                 z = encoder(x)
-                mixed_z, y_a, y_b, lam = mixup_data(z, target)
+                mixed_z, y_a, y_b, lam = mixup_data(z, target, args.alpha)
                 prediction = projector(mixed_z)
                 loss = mixup_criterion(loss_fn, prediction, y_a, y_b, lam)
                 
@@ -232,18 +231,19 @@ def train_optimized(encoder, projector, data_loader, transform, loss_fn, optimis
                 
             elif args.mix == 'mix2':
                 p = np.random.random()
-                z = encoder(x)
                 
                 if p < 0.5:  # 50% manmixup
-                    mixed_z, y_a, y_b, lam = mixup_data(z, target)
+                    z = encoder(x)
+                    mixed_z, y_a, y_b, lam = mixup_data(z, target, args.alpha)
                     prediction = projector(mixed_z)
                     loss = mixup_criterion(loss_fn, prediction, y_a, y_b, lam)
                 elif p < 0.75:  # 25% multimix
+                    z = encoder(x)
                     mixed_z, mixed_y, lam = multimix_data(z, target, args.mixnum, args.alpha1, args.alpha2)
                     prediction = projector(mixed_z)
                     loss = multimix_criterion(loss_fn, prediction, mixed_y, lam)
-                else:  # 25% mixup
-                    mixed_x, y_a, y_b, lam = mixup_data(x, target)
+                else:  # 25% mixup - work directly with input
+                    mixed_x, y_a, y_b, lam = mixup_data(x, target, args.alpha)
                     prediction = projector(encoder(mixed_x))
                     loss = mixup_criterion(loss_fn, prediction, y_a, y_b, lam)
             else:
@@ -255,7 +255,8 @@ def train_optimized(encoder, projector, data_loader, transform, loss_fn, optimis
         scaler.step(optimiser)
         scaler.update()
 
-        loss_total += loss.item()  
+        loss_total += loss.item()
+        num_total_batches += 1
 
     # Use synthetic data if available and requested
     if use_synthetic and diffusion_dataset is not None and len(diffusion_dataset) > 0:
@@ -280,8 +281,9 @@ def train_optimized(encoder, projector, data_loader, transform, loss_fn, optimis
             scaler.update()
 
             loss_total += loss.item()
+            num_total_batches += 1
 
-    loss_total /= num_batches   
+    loss_total /= num_total_batches   
     return loss_total
 
 # Keep the original mixing functions for compatibility
